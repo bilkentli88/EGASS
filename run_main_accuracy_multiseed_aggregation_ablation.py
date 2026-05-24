@@ -62,15 +62,7 @@ DETAIL_COLUMNS = [
     "hidden_dim",
     "latent_dim",
     "clip_grad_max_norm",
-    "lambda_sparse",
-    "lambda_fused",
-    "gamma_stab",
-    "rho",
     "ce_loss",
-    "sparse_loss",
-    "fused_loss",
-    "stab_loss",
-    "spectral_norm_A",
     "alpha_mean",
     "alpha_std",
     "alpha_min",
@@ -104,33 +96,16 @@ MODEL_CONFIGS = [
         "model_name": "PlainSSM",
         "model_type": "plain",
         "pooling_type": "mean",
-        "lambda_sparse": 0.0,
-        "lambda_fused": 0.0,
-        "gamma_stab": 0.0,
     },
     {
         "model_name": "NormGated",
         "model_type": "gated",
         "pooling_type": "normalized",
-        "lambda_sparse": 0.0,
-        "lambda_fused": 0.0,
-        "gamma_stab": 0.0,
     },
     {
         "model_name": "Proposed_Unnormalized_Base",
         "model_type": "gated",
         "pooling_type": "unnormalized",
-        "lambda_sparse": 0.0,
-        "lambda_fused": 0.0,
-        "gamma_stab": 0.0,
-    },
-    {
-        "model_name": "Proposed_Unnormalized_Sparse_1e-5",
-        "model_type": "gated",
-        "pooling_type": "unnormalized",
-        "lambda_sparse": 1e-5,
-        "lambda_fused": 0.0,
-        "gamma_stab": 0.0,
     },
 ]
 
@@ -148,11 +123,6 @@ class TrainConfig:
     patience: int = 10
     hidden_dim: int = 64
     latent_dim: int = 64
-
-    lambda_sparse: float = 0.0
-    lambda_fused: float = 0.0
-    gamma_stab: float = 0.0
-    rho: float = 0.95
 
     clip_grad_max_norm: float = 0.5
     val_size: float = 0.2
@@ -458,52 +428,10 @@ def get_gate_statistics(model: nn.Module, loader: DataLoader, run_device: torch.
     }
 
 
-def compute_plain_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    return nn.CrossEntropyLoss()(logits, targets)
-
-
-def compute_gated_loss(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    aux: Dict,
-    cfg: TrainConfig,
-) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Cross-entropy plus optional gate/stability penalties."""
+def compute_loss(logits: torch.Tensor, targets: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Compute standard cross-entropy loss."""
     ce_loss = nn.CrossEntropyLoss()(logits, targets)
-
-    alpha = aux["alpha"]
-    A = aux["A"]
-
-    sparse_loss = cfg.lambda_sparse * alpha.abs().sum(dim=1).mean()
-
-    if alpha.shape[1] > 1:
-        fused_loss = cfg.lambda_fused * (alpha[:, 1:] - alpha[:, :-1]).abs().mean()
-    else:
-        fused_loss = torch.tensor(0.0, device=logits.device)
-
-    if cfg.gamma_stab > 0:
-        if not torch.isfinite(A).all():
-            raise ValueError("Non-finite values detected in transition matrix A.")
-
-        spectral_norm = torch.linalg.matrix_norm(A, ord=2)
-        stability_violation = torch.relu(spectral_norm - cfg.rho)
-        stab_loss = cfg.gamma_stab * (stability_violation ** 2)
-        spectral_norm_value = float(spectral_norm.detach().cpu())
-    else:
-        stab_loss = torch.tensor(0.0, device=logits.device)
-        spectral_norm_value = float("nan")
-
-    total_loss = ce_loss + sparse_loss + fused_loss + stab_loss
-
-    stats = {
-        "ce_loss": float(ce_loss.detach().cpu()),
-        "sparse_loss": float(sparse_loss.detach().cpu()),
-        "fused_loss": float(fused_loss.detach().cpu()),
-        "stab_loss": float(stab_loss.detach().cpu()),
-        "spectral_norm_A": spectral_norm_value,
-    }
-
-    return total_loss, stats
+    return ce_loss, {"ce_loss": float(ce_loss.detach().cpu())}
 
 
 def build_model(
@@ -569,13 +497,9 @@ def train_one_model(
             y_batch = y_batch.to(cfg.device)
 
             optimizer.zero_grad()
-            logits, aux = model(X_batch)
-
-            if "alpha" in aux:
-                loss, train_stats = compute_gated_loss(logits, y_batch, aux, cfg)
-                last_train_stats = train_stats
-            else:
-                loss = compute_plain_loss(logits, y_batch)
+            logits, _ = model(X_batch)
+            loss, train_stats = compute_loss(logits, y_batch)
+            last_train_stats = train_stats
 
             if not torch.isfinite(loss):
                 raise ValueError(
@@ -647,22 +571,14 @@ def train_one_model(
         "hidden_dim": cfg.hidden_dim,
         "latent_dim": cfg.latent_dim,
         "clip_grad_max_norm": cfg.clip_grad_max_norm,
-        "lambda_sparse": cfg.lambda_sparse,
-        "lambda_fused": cfg.lambda_fused,
-        "gamma_stab": cfg.gamma_stab,
-        "rho": cfg.rho,
     }
 
+    result.update(last_train_stats)
+
     if hasattr(model, "gate_layer"):
-        result.update(last_train_stats)
         result.update(get_gate_statistics(model, test_loader, cfg.device))
     else:
         result.update({
-            "ce_loss": "",
-            "sparse_loss": "",
-            "fused_loss": "",
-            "stab_loss": "",
-            "spectral_norm_A": "",
             "alpha_mean": "",
             "alpha_std": "",
             "alpha_min": "",
@@ -706,15 +622,7 @@ def make_error_result(
         "hidden_dim": cfg.hidden_dim,
         "latent_dim": cfg.latent_dim,
         "clip_grad_max_norm": cfg.clip_grad_max_norm,
-        "lambda_sparse": cfg.lambda_sparse,
-        "lambda_fused": cfg.lambda_fused,
-        "gamma_stab": cfg.gamma_stab,
-        "rho": cfg.rho,
         "ce_loss": "",
-        "sparse_loss": "",
-        "fused_loss": "",
-        "stab_loss": "",
-        "spectral_norm_A": "",
         "alpha_mean": "",
         "alpha_std": "",
         "alpha_min": "",
@@ -723,7 +631,7 @@ def make_error_result(
 
 
 def run_one_dataset_seed(dataset_name: str, seed: int, cfg: TrainConfig) -> None:
-    """Run all four aggregation variants for one dataset/seed pair."""
+    """Run all aggregation variants for one dataset/seed pair."""
     print("\n" + "=" * 80)
     print(f"Running dataset={dataset_name}, seed={seed}")
     print("=" * 80)
@@ -749,10 +657,6 @@ def run_one_dataset_seed(dataset_name: str, seed: int, cfg: TrainConfig) -> None
     )
 
     for model_cfg in MODEL_CONFIGS:
-        cfg.lambda_sparse = model_cfg["lambda_sparse"]
-        cfg.lambda_fused = model_cfg["lambda_fused"]
-        cfg.gamma_stab = model_cfg["gamma_stab"]
-
         model_name = model_cfg["model_name"]
         model_type = model_cfg["model_type"]
         pooling_type = model_cfg["pooling_type"]
@@ -850,7 +754,6 @@ def summarize_results(detail_csv: str | Path, summary_csv: str | Path) -> None:
         "PlainSSM": 0,
         "NormGated": 1,
         "Proposed_Unnormalized_Base": 2,
-        "Proposed_Unnormalized_Sparse_1e-5": 3,
     }
     summary_rows.sort(key=lambda row: (row["dataset"], model_order.get(row["model"], 99)))
 
@@ -867,7 +770,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run the UCR multi-seed aggregation ablation experiment for "
-            "PlainSSM, NormGated, Proposed Base, and Sparse 1e-5."
+            "PlainSSM, NormGated, and Proposed Base."
         )
     )
 
@@ -928,10 +831,7 @@ def main() -> None:
         print(
             f"  {model_cfg['model_name']}: "
             f"model_type={model_cfg['model_type']}, "
-            f"pooling_type={model_cfg['pooling_type']}, "
-            f"lambda_sparse={model_cfg['lambda_sparse']}, "
-            f"lambda_fused={model_cfg['lambda_fused']}, "
-            f"gamma_stab={model_cfg['gamma_stab']}"
+            f"pooling_type={model_cfg['pooling_type']}"
         )
 
     for dataset_name in cfg.dataset_names:
