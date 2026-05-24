@@ -223,11 +223,9 @@ Corresponds to the evidence-norm deletion-curve experiment.
 python run_evidence_deletion_curves.py --device auto --results-dir Results
 ```
 
-This script uses:
+This script uses the evidence-norm score:
 
-\[
-s_t^{(\mathrm{norm})} = \|e_t\|_2 = \|\alpha_t z_t\|_2.
-\]
+`s_norm(t) = ||e_t||_2 = ||alpha_t z_t||_2`
 
 It compares:
 
