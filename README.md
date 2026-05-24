@@ -112,9 +112,9 @@ Datasets/<DatasetName>_TEST
 
 The loader independently standardizes each time series:
 
-\[
+$$
 x \leftarrow \frac{x-\bar{x}}{\operatorname{std}(x)}.
-\]
+$$
 
 Labels are one-hot encoded using the union of train and test labels, then converted to integer class indices inside the experiment scripts.
 
