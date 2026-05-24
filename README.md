@@ -177,7 +177,7 @@ Corresponds to the main classification tables comparing:
 PlainSSM
 NormGated
 Proposed_Unnormalized_Base
-Proposed_Unnormalized_Sparse_1e-5
+
 ```
 
 Run:
